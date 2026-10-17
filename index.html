@@ -1,7 +1,0 @@
-const raw=Array.from(res.probs.data);
-const t=meta.op_threshs;
-const p=raw.map((x,i)=>{
-  const th=t&&t[i];
-  if(th==null) return x;
-  return x<th ? x/(th*2) : 1-(1-x)/((1-th)*2);
-});
