@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ChestAI Radiology</title>
+<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
+<style>
+body{font-family:system-ui,sans-serif;background:#111;color:#eee;max-width:600px;margin:auto;padding:16px}
+h1{font-size:22px}
+.warn{background:#3a2a00;border:1px solid #a77b00;padding:10px;border-radius:8px;font-size:13px}
+input,button{width:100%;margin-top:12px;padding:12px;font-size:16px;border-radius:8px;border:0;box-sizing:border-box}
+input{background:#222;color:#eee}
+button{background:#2e7d32;color:#fff}
+button:disabled{background:#444;color:#999}
+img{width:100%;margin-top:12px;border-radius:8px}
+.row{margin-top:10px;font-size:14px}
+.bar{background:#333;border-radius:4px;height:10px;margin-top:4px}
+.fill{background:#4fc3f7;height:10px;border-radius:4px}
+#status{margin-top:12px;font-size:14px;color:#aaa}
+</style>
+</head>
+<body>
+<h1>ChestAI Radiology</h1>
+<div class="warn">⚠️ Educational and research use ONLY. Not a medical device. Not for clinical diagnosis. Do not upload identifiable patient images. The image is processed on your device and is never uploaded.<br>للتعليم والبحث فقط، وليس للتشخيص الطبي.</div>
+<input type="file" id="file" accept="image/*">
+<img id="prev" style="display:none">
+<button id="go" disabled>Analyze</button>
+<div id="status">Starting...</div>
+<div id="out"></div>
+<script>
+const status=document.getElementById('status');
+const btn=document.getElementById('go');
+const fileIn=document.getElementById('file');
+const prev=document.getElementById('prev');
+const out=document.getElementById('out');
+let session=null, meta=null, img=null;
+
+function update(){ btn.disabled=!(session && img); }
+
+async function load(){
+  try{
+    status.textContent='Loading model (about 28 MB)...';
+    ort.env.wasm.wasmPaths='https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/';
+    const get=n=>fetch(n).then(r=>{if(!r.ok)throw new Error(n+' not found');return r});
+    const [a,b,m]=await Promise.all([
+      get('chestai.onnx.part1').then(r=>r.arrayBuffer()),
+      get('chestai.onnx.part2').then(r=>r.arrayBuffer()),
+      get('meta.json').then(r=>r.json())
+    ]);
+    const buf=new Uint8Array(a.byteLength+b.byteLength);
+    buf.set(new Uint8Array(a),0);
+    buf.set(new Uint8Array(b),a.byteLength);
+    session=await ort.InferenceSession.create(buf,{executionProviders:['wasm']});
+    meta=m;
+    status.textContent='Model ready. Choose an image.';
+    update();
+  }catch(e){ status.textContent='Error: '+e.message; }
+}
+
+fileIn.addEventListener('change',()=>{
+  const f=fileIn.files[0]; if(!f) return;
+  const im=new Image();
+  im.onload=()=>{ img=im; prev.src=im.src; prev.style.display='block'; out.innerHTML=''; update(); };
+  im.src=URL.createObjectURL(f);
+});
+
+function prep(im){
+  const s=Math.min(im.naturalWidth,im.naturalHeight);
+  const sx=(im.naturalWidth-s)/2, sy=(im.naturalHeight-s)/2;
+  const c=document.createElement('canvas'); c.width=224; c.height=224;
+  const g=c.getContext('2d');
+  g.drawImage(im,sx,sy,s,s,0,0,224,224);
+  const d=g.getImageData(0,0,224,224).data;
+  const x=new Float32Array(224*224);
+  for(let i=0;i<x.length;i++){
+    const v=(d[i*4]+d[i*4+1]+d[i*4+2])/3;
+    x[i]=(2*(v/255)-1)*1024;
+  }
+  return new ort.Tensor('float32',x,[1,1,224,224]);
+}
+
+btn.addEventListener('click',async()=>{
+  try{
+    btn.disabled=true; status.textContent='Analyzing...';
+    const res=await session.run({input:prep(img)});
+    const p=res.probs.data;
+    const rows=meta.pathologies.map((n,i)=>({n:n,p:p[i]})).filter(r=>r.n).sort((a,b)=>b.p-a.p);
+    out.innerHTML=rows.map(r=>'<div class="row">'+r.n+': '+(r.p*100).toFixed(1)+'%<div class="bar"><div class="fill" style="width:'+(r.p*100).toFixed(1)+'%"></div></div></div>').join('');
+    status.textContent='Done. Scores are model outputs for learning only.';
+  }catch(e){ status.textContent='Error: '+e.message; }
+  update();
+});
+
+load();
+</script>
+</body>
+</html>
